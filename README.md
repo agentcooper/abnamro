@@ -1,4 +1,4 @@
-### Personal finance report for ABN AMRO banking
+### abnamro
 
 Finance report tool for ABN AMRO.
 
