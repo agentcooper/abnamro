@@ -1,0 +1,132 @@
+#!/usr/bin/env node
+
+var argv = require('yargs')
+    .usage('Usage: $0 [options]')
+    .options({
+        'json': {
+            demand: true,
+            describe: 'path to json data',
+            type: 'string'
+        },
+
+        'year': {
+            demand: true,
+            describe: 'for which year',
+            type: 'string'
+        },
+
+        'transactions': {
+            describe: 'show transactions',
+            type: 'boolean'
+        },
+
+        'exclude': {
+            describe: 'categories to exclude',
+            type: 'array'
+        }
+    })
+    .argv;
+
+var fs = require('fs');
+
+var _ = require('lodash');
+
+var path = require('path');
+
+var codes = require('../codes');
+
+var moment = require('moment');
+
+var json = JSON.parse(fs.readFileSync(argv.json, 'utf8'));
+
+var transactions = json.map(function(transaction) {
+    return Object.assign({}, transaction, {
+        transactionDate: new Date(Number(transaction.transactionDate))
+    });
+});
+
+function categorize(accountName) {
+    return codes.find(function(code) {
+        if (typeof code.match === 'string') {
+            return accountName.toLowerCase().indexOf(code.match.toLowerCase()) !== -1;
+        }
+
+        return code.match.test(accountName);
+    });
+}
+
+var transactions = transactions.filter(
+    transaction =>
+        transaction.transactionDate.getFullYear() === Number(argv.year));
+
+var byMonth = _.groupBy(transactions, transaction => [
+    transaction.transactionDate.getMonth() + 1,
+    transaction.transactionDate.getFullYear()
+].join('-'));
+
+var result = _.mapValues(byMonth, function(transactions) {
+    var grouped = _.groupBy(transactions, function(transaction) {
+
+        var c = categorize(transaction.counterAccountName);
+
+        return (c && c.category) || 'unknown';
+    });
+
+    grouped = _.omit(
+        grouped,
+        ['savings'].concat(argv.exclude || [])
+    );
+
+    var byCategory = _.mapValues(grouped, function(transactions) {
+        return {
+            transactions: transactions,
+            total: Math.floor(
+                transactions.reduce((sum, transaction) => sum + transaction.amount, 0))
+        };
+    });
+
+    return {
+        byCategory: byCategory,
+
+        totalSpent: _.values(byCategory).reduce(
+            (sum, category) => sum + Math.min(category.total, 0), 0)
+    };
+});
+
+var salary = _.pairs(result).map(function(monthPair) {
+    var s = monthPair[1].byCategory.salary;
+
+    return (s && s.total) || 0;
+}).reduce((sum, amount) => sum + amount, 0);
+
+function formatTransaction(transaction) {
+    return [
+        moment(transaction.transactionDate).format('Do MMMM YYYY'),
+        transaction.amount,
+        transaction.counterAccountName
+    ].join('\t');
+}
+
+var output = _.pairs(result).map(function(monthPair) {
+    return (
+        `===== ${monthPair[0]} =====` +
+        '\n\n' +
+        _.pairs(monthPair[1].byCategory)
+        .sort((a, b) => b[1].total - a[1].total)
+        .map(categoryPair =>
+            `${categoryPair[1].total}\t${categoryPair[0]}` +
+
+            (argv.transactions ?
+                '\n\n' +
+                categoryPair[1].transactions.map(formatTransaction).join('\n') +
+                '\n'
+                :
+                '')
+        )
+        .join('\n') +
+        '\n-----\n' +
+        monthPair[1].totalSpent + '\ttotal spent'
+    );
+}).join('\n\n') + '\n\n-----\n' + salary + '\ttotal year salary';
+
+console.log(output);
